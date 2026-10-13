@@ -1,0 +1,73 @@
+name: sibling-failure-test
+on: workflow_dispatch
+
+jobs:
+  # Simulates deploy-staging succeeding.
+  staging-ok:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "staging deployed"
+
+  # Simulates check-code-freeze passing (no freeze active).
+  check-code-freeze:
+    needs: [staging-ok]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "no freeze active"
+
+  # Simulates notify-prod-deployment-started FAILING (e.g. Slack action error).
+  notify-fails:
+    needs: [check-code-freeze]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+
+  # Q1 decider: current systems-data-explorer-deploy.yml shape. deploy-prod is a
+  # SIBLING of the notify job (needs only check-code-freeze, same workaround if).
+  # Runs => a notify failure does not block deploy-prod.
+  deploy-prod-sibling:
+    needs: [check-code-freeze]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "deploy-prod ran despite notify failure"
+
+  # Alternative: deploy-prod ALSO needs the notify job (strict notify -> deploy order),
+  # same workaround if. Skipped => naive chaining breaks the "slack allowed to fail" property.
+  deploy-prod-needs-notify:
+    needs: [check-code-freeze, notify-fails]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "chained deploy-prod ran despite notify failure"
+
+  # Alternative: strict notify -> deploy order with a tolerant if that only requires
+  # the notify job to have actually run (success OR failure), not skipped.
+  # Runs => viable shape if notify must precede deploy-prod.
+  deploy-prod-chained-tolerant:
+    needs: [check-code-freeze, notify-fails]
+    if: ${{ !cancelled()
+      && (needs.check-code-freeze.result == 'success' || needs.check-code-freeze.result == 'skipped')
+      && (needs.notify-fails.result == 'success' || needs.notify-fails.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "chained tolerant deploy-prod ran despite notify failure"
+
+  # Probe: does failure() see a non-ancestor (sibling) failure at if-evaluation time?
+  # Eligible the moment check-code-freeze completes, while notify-fails is still pending.
+  failure-probe-sibling:
+    needs: [check-code-freeze]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "failure() saw the sibling failure"
+
+  # Simulates the real notify-failure job (if: failure()).
+  # Runs => a Slack notify failure alone triggers the "Deployment Failed" message.
+  notify-failure-job:
+    needs: [check-code-freeze, notify-fails, deploy-prod-sibling]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "notify-failure fired"
