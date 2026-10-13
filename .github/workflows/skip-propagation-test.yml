@@ -1,0 +1,59 @@
+name: skip-propagation-test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # Simulates check-code-freeze being skipped by the break-glass bypass.
+  a-skipped:
+    runs-on: ubuntu-latest
+    if: ${{ false }}
+    steps:
+      - run: echo "this job is intentionally skipped"
+
+  # Direct child of the skip WITH workaround (= deploy-prod pattern in the PRs).
+  b-workaround:
+    needs: a-skipped
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "direct child with workaround ran"
+
+  # Grandchild, NO if (= PR 191824's untouched prod-gov-approval-gate / deploy-prod-gov).
+  # THE DECIDER: success => propagation is direct-needs-only (PR complete).
+  # skipped => propagation is transitive (PR has gaps).
+  c-implicit-grandchild:
+    needs: b-workaround
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "grandchild with implicit success() ran"
+
+  # Grandchild WITH workaround (= our generator fix for prod-gov-approval-gate).
+  d-workaround-grandchild:
+    needs: b-workaround
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "grandchild with workaround ran"
+
+  # Direct child of the skip, NO if (sanity check - both models predict skipped).
+  e-implicit-direct-child:
+    needs: a-skipped
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "should NOT run"
+
+  # Grandchild with explicit result assert (= our generator fix for deploy-prod-gov).
+  f-assert-result:
+    needs: b-workaround
+    if: ${{ !cancelled() && needs.b-workaround.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "grandchild with explicit result assert ran"
+
+  # Mixed direct needs: one skipped ancestor + one succeeded direct need, no if.
+  g-mixed-needs:
+    needs: [a-skipped, b-workaround]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "mixed needs ran"
