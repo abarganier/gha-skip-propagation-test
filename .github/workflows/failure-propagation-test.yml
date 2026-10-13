@@ -1,0 +1,52 @@
+name: failure-propagation-test
+on: workflow_dispatch
+
+jobs:
+  # Simulates deploy-staging FAILING
+  staging-fails:
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+
+  # Simulates check-code-freeze: needs staging, if has NO status function
+  # -> implicit success() applies -> should be SKIPPED when staging fails
+  check-code-freeze:
+    needs: [staging-fails]
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - run: echo "freeze check ran"
+
+  # Simulates our deploy-prod fix: needs ONLY check-code-freeze
+  # QUESTION: does !failure() see the transitive staging failure?
+  deploy-prod-workaround:
+    needs: [check-code-freeze]
+    runs-on: ubuntu-latest
+    if: ${{ !failure() && !cancelled() }}
+    steps:
+      - run: echo "RAN => reviewer bug claim CONFIRMED"
+
+  # Probes whether failure() is transitive through the skipped intermediary
+  failure-probe:
+    needs: [check-code-freeze]
+    runs-on: ubuntu-latest
+    if: ${{ failure() }}
+    steps:
+      - run: echo "failure() IS transitive through skipped"
+
+  # Control: explicit success() - should be SKIPPED
+  explicit-success-control:
+    needs: [check-code-freeze]
+    runs-on: ubuntu-latest
+    if: ${{ success() }}
+    steps:
+      - run: echo "control ran"
+
+  # Simulates prod-gov-approval-gate: needs ONLY deploy-prod (which was skipped)
+  # 4th level below the failing staging job
+  gate-workaround:
+    needs: [deploy-prod-workaround]
+    runs-on: ubuntu-latest
+    if: ${{ !failure() && !cancelled() }}
+    steps:
+      - run: echo "gate RAN => reviewer claim confirmed at 4th level"
